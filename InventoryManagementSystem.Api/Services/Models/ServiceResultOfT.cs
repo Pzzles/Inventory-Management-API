@@ -15,7 +15,7 @@ public sealed class ServiceResult<T> : ServiceResult
         return new ServiceResult<T>(true, value, Array.Empty<ServiceError>());
     }
 
-    public static ServiceResult<T> Fail(params ServiceError[] errors)
+    public new static ServiceResult<T> Fail(params ServiceError[] errors)
     {
         return new ServiceResult<T>(false, default, errors);
     }

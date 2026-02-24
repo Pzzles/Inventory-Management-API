@@ -14,7 +14,10 @@ public sealed class InventoryDbContext : DbContext
     public DbSet<Supplier> Suppliers => Set<Supplier>();
     public DbSet<Employee> Employees => Set<Employee>();
     public DbSet<Asset> Assets => Set<Asset>();
+    public DbSet<AssetStatusHistory> AssetStatusHistories => Set<AssetStatusHistory>();
+    public DbSet<AssetAssignmentHistory> AssetAssignmentHistories => Set<AssetAssignmentHistory>();
     public DbSet<Consumable> Consumables => Set<Consumable>();
+    public DbSet<ConsumableAdjustment> ConsumableAdjustments => Set<ConsumableAdjustment>();
     public DbSet<Repair> Repairs => Set<Repair>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
@@ -62,19 +65,103 @@ public sealed class InventoryDbContext : DbContext
         modelBuilder.Entity<Asset>(entity =>
         {
             entity.HasKey(asset => asset.Id);
-            entity.Property(asset => asset.Name).IsRequired().HasMaxLength(200);
             entity.Property(asset => asset.AssetTag).IsRequired().HasMaxLength(100);
+            entity.Property(asset => asset.SerialNumber).IsRequired().HasMaxLength(100);
+            entity.Property(asset => asset.Type).IsRequired().HasMaxLength(100);
+            entity.Property(asset => asset.Brand).IsRequired().HasMaxLength(100);
+            entity.Property(asset => asset.Model).IsRequired().HasMaxLength(100);
+            entity.Property(asset => asset.Description).HasMaxLength(1000);
+            entity.Property(asset => asset.Notes).HasMaxLength(2000);
+            entity.Property(asset => asset.Status).IsRequired();
             entity.HasIndex(asset => asset.AssetTag).IsUnique();
+            entity.HasIndex(asset => asset.SerialNumber);
+            entity.HasIndex(asset => asset.Type);
+            entity.HasIndex(asset => asset.Brand);
             entity.HasQueryFilter(asset => !asset.IsDeleted);
+
+            entity.HasOne(asset => asset.Location)
+                .WithMany()
+                .HasForeignKey(asset => asset.LocationId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(asset => asset.Supplier)
+                .WithMany()
+                .HasForeignKey(asset => asset.SupplierId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(asset => asset.AssignedEmployee)
+                .WithMany()
+                .HasForeignKey(asset => asset.AssignedEmployeeId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AssetStatusHistory>(entity =>
+        {
+            entity.HasKey(history => history.Id);
+            entity.Property(history => history.OperatorName).IsRequired().HasMaxLength(200);
+            entity.Property(history => history.ToStatus).IsRequired();
+            entity.Property(history => history.ChangedAtUtc).IsRequired();
+            entity.HasIndex(history => history.AssetId);
+
+            entity.HasOne(history => history.Asset)
+                .WithMany()
+                .HasForeignKey(history => history.AssetId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AssetAssignmentHistory>(entity =>
+        {
+            entity.HasKey(history => history.Id);
+            entity.Property(history => history.OperatorName).IsRequired().HasMaxLength(200);
+            entity.Property(history => history.AssignedAtUtc).IsRequired();
+            entity.HasIndex(history => history.AssetId);
+            entity.HasIndex(history => history.ToEmployeeId);
+
+            entity.HasOne(history => history.Asset)
+                .WithMany()
+                .HasForeignKey(history => history.AssetId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(history => history.FromEmployee)
+                .WithMany()
+                .HasForeignKey(history => history.FromEmployeeId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(history => history.ToEmployee)
+                .WithMany()
+                .HasForeignKey(history => history.ToEmployeeId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<Consumable>(entity =>
         {
             entity.HasKey(consumable => consumable.Id);
             entity.Property(consumable => consumable.Name).IsRequired().HasMaxLength(200);
-            entity.Property(consumable => consumable.Sku).IsRequired().HasMaxLength(100);
-            entity.HasIndex(consumable => consumable.Sku).IsUnique();
+            entity.Property(consumable => consumable.Category).IsRequired().HasMaxLength(100);
+            entity.Property(consumable => consumable.Unit).IsRequired().HasMaxLength(50);
+            entity.Property(consumable => consumable.QuantityOnHand).IsRequired();
+            entity.Property(consumable => consumable.ReorderLevel).IsRequired();
             entity.HasQueryFilter(consumable => !consumable.IsDeleted);
+
+            entity.HasOne(consumable => consumable.Location)
+                .WithMany()
+                .HasForeignKey(consumable => consumable.LocationId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<ConsumableAdjustment>(entity =>
+        {
+            entity.HasKey(adjustment => adjustment.Id);
+            entity.Property(adjustment => adjustment.QuantityChange).IsRequired();
+            entity.Property(adjustment => adjustment.Reason).IsRequired().HasMaxLength(500);
+            entity.Property(adjustment => adjustment.AdjustedAtUtc).IsRequired();
+            entity.Property(adjustment => adjustment.OperatorName).IsRequired().HasMaxLength(200);
+            entity.HasIndex(adjustment => adjustment.ConsumableId);
+
+            entity.HasOne(adjustment => adjustment.Consumable)
+                .WithMany()
+                .HasForeignKey(adjustment => adjustment.ConsumableId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Repair>(entity =>

@@ -17,4 +17,20 @@ public interface IConsumableService
     Task<ServiceResult<PagedResult<Consumable>>> GetPagedAsync(
         RepositoryQueryOptions options,
         CancellationToken cancellationToken);
+
+    Task<ServiceResult<Consumable>> StockInAsync(
+        int id,
+        int quantity,
+        string reason,
+        string operatorName,
+        CancellationToken cancellationToken);
+
+    Task<ServiceResult<Consumable>> StockOutAsync(
+        int id,
+        int quantity,
+        string reason,
+        string operatorName,
+        CancellationToken cancellationToken);
+
+    Task<ServiceResult<IReadOnlyList<Consumable>>> GetLowStockAsync(CancellationToken cancellationToken);
 }

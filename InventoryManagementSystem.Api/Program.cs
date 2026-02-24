@@ -46,7 +46,10 @@ builder.Services.AddScoped<ILocationRepository, LocationRepository>();
 builder.Services.AddScoped<ISupplierRepository, SupplierRepository>();
 builder.Services.AddScoped<IEmployeeRepository, EmployeeRepository>();
 builder.Services.AddScoped<IAssetRepository, AssetRepository>();
+builder.Services.AddScoped<IAssetStatusHistoryRepository, AssetStatusHistoryRepository>();
+builder.Services.AddScoped<IAssetAssignmentHistoryRepository, AssetAssignmentHistoryRepository>();
 builder.Services.AddScoped<IConsumableRepository, ConsumableRepository>();
+builder.Services.AddScoped<IConsumableAdjustmentRepository, ConsumableAdjustmentRepository>();
 builder.Services.AddScoped<IRepairRepository, RepairRepository>();
 builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
 
