@@ -5,6 +5,7 @@ using InventoryManagementSystem.Api.Repositories.Models;
 using InventoryManagementSystem.Api.Services;
 using InventoryManagementSystem.Api.Services.Contracts;
 using InventoryManagementSystem.Api.Services.Models;
+using Microsoft.EntityFrameworkCore;
 
 namespace InventoryManagementSystem.Api.Services.Implementations;
 
@@ -361,6 +362,150 @@ public sealed class AssetService : IAssetService
         return ServiceResult.Ok();
     }
 
+    public async Task<ServiceResult<PagedResult<Asset>>> GetByStatusReportAsync(
+        AssetStatus? status,
+        RepositoryQueryOptions options,
+        CancellationToken cancellationToken)
+    {
+        var query = _dbContext.Assets.AsQueryable();
+
+        if (status.HasValue)
+        {
+            query = query.Where(asset => asset.Status == status.Value);
+        }
+
+        query = ApplyAssetSorting(query, options.SortBy, options.SortDirection);
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var pageNumber = Math.Max(1, options.PageNumber);
+        var pageSize = Math.Max(1, options.PageSize);
+
+        var items = await query
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return ServiceResult<PagedResult<Asset>>.Ok(new PagedResult<Asset>(
+            items,
+            totalCount,
+            pageNumber,
+            pageSize));
+    }
+
+    public async Task<ServiceResult<PagedResult<Asset>>> GetByLocationReportAsync(
+        int? locationId,
+        RepositoryQueryOptions options,
+        CancellationToken cancellationToken)
+    {
+        var query = _dbContext.Assets.AsQueryable();
+
+        if (locationId.HasValue && locationId.Value > 0)
+        {
+            query = query.Where(asset => asset.LocationId == locationId.Value);
+        }
+
+        query = ApplyAssetSorting(query, options.SortBy, options.SortDirection);
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var pageNumber = Math.Max(1, options.PageNumber);
+        var pageSize = Math.Max(1, options.PageSize);
+
+        var items = await query
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return ServiceResult<PagedResult<Asset>>.Ok(new PagedResult<Asset>(
+            items,
+            totalCount,
+            pageNumber,
+            pageSize));
+    }
+
+    public async Task<ServiceResult<PagedResult<Asset>>> GetWarrantyExpiryReportAsync(
+        DateTime fromUtc,
+        DateTime toUtc,
+        RepositoryQueryOptions options,
+        CancellationToken cancellationToken)
+    {
+        var query = _dbContext.Assets
+            .Where(asset => asset.WarrantyExpiry.HasValue)
+            .Where(asset => asset.WarrantyExpiry >= fromUtc && asset.WarrantyExpiry <= toUtc);
+
+        query = ApplyAssetSorting(query, options.SortBy, options.SortDirection);
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var pageNumber = Math.Max(1, options.PageNumber);
+        var pageSize = Math.Max(1, options.PageSize);
+
+        var items = await query
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return ServiceResult<PagedResult<Asset>>.Ok(new PagedResult<Asset>(
+            items,
+            totalCount,
+            pageNumber,
+            pageSize));
+    }
+
+    public async Task<ServiceResult<PagedResult<EmployeeAssetsReportItem>>> GetAssetsByEmployeeReportAsync(
+        EmployeeAssetsReportOptions options,
+        CancellationToken cancellationToken)
+    {
+        var employeeQuery = _dbContext.Employees.AsQueryable();
+
+        if (options.EmployeeId.HasValue && options.EmployeeId.Value > 0)
+        {
+            employeeQuery = employeeQuery.Where(employee => employee.Id == options.EmployeeId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.Email))
+        {
+            employeeQuery = employeeQuery.Where(employee => employee.Email == options.Email);
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.StaffNumber))
+        {
+            employeeQuery = employeeQuery.Where(employee => employee.StaffNumber == options.StaffNumber);
+        }
+
+        var totalCount = await employeeQuery.CountAsync(cancellationToken);
+        var pageNumber = Math.Max(1, options.PageNumber);
+        var pageSize = Math.Max(1, options.PageSize);
+
+        var employees = await employeeQuery
+            .OrderBy(employee => employee.LastName)
+            .ThenBy(employee => employee.FirstName)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        var employeeIds = employees.Select(employee => employee.Id).ToList();
+
+        var assets = await _dbContext.Assets
+            .Where(asset => asset.AssignedEmployeeId.HasValue)
+            .Where(asset => employeeIds.Contains(asset.AssignedEmployeeId!.Value))
+            .ToListAsync(cancellationToken);
+
+        var assetLookup = assets
+            .GroupBy(asset => asset.AssignedEmployeeId!.Value)
+            .ToDictionary(group => group.Key, group => (IReadOnlyList<Asset>)group.ToList());
+
+        var items = employees
+            .Select(employee =>
+            {
+                assetLookup.TryGetValue(employee.Id, out var assignedAssets);
+                assignedAssets ??= Array.Empty<Asset>();
+                return new EmployeeAssetsReportItem(employee, assignedAssets);
+            })
+            .ToList();
+
+        return ServiceResult<PagedResult<EmployeeAssetsReportItem>>.Ok(
+            new PagedResult<EmployeeAssetsReportItem>(items, totalCount, pageNumber, pageSize));
+    }
+
     private static ServiceResult Validate(Asset asset, string operatorName)
     {
         var errors = new List<ServiceError>();
@@ -508,5 +653,26 @@ public sealed class AssetService : IAssetService
         };
 
         await _auditLogService.CreateAsync(audit, cancellationToken);
+    }
+
+    private static IQueryable<Asset> ApplyAssetSorting(
+        IQueryable<Asset> query,
+        string? sortBy,
+        string? sortDirection)
+    {
+        var descending = string.Equals(sortDirection, "desc", StringComparison.OrdinalIgnoreCase);
+
+        return (sortBy ?? string.Empty).ToLowerInvariant() switch
+        {
+            "assettag" => descending ? query.OrderByDescending(asset => asset.AssetTag) : query.OrderBy(asset => asset.AssetTag),
+            "serialnumber" => descending ? query.OrderByDescending(asset => asset.SerialNumber) : query.OrderBy(asset => asset.SerialNumber),
+            "type" => descending ? query.OrderByDescending(asset => asset.Type) : query.OrderBy(asset => asset.Type),
+            "brand" => descending ? query.OrderByDescending(asset => asset.Brand) : query.OrderBy(asset => asset.Brand),
+            "model" => descending ? query.OrderByDescending(asset => asset.Model) : query.OrderBy(asset => asset.Model),
+            "purchasedate" => descending ? query.OrderByDescending(asset => asset.PurchaseDate) : query.OrderBy(asset => asset.PurchaseDate),
+            "warrantyexpiry" => descending ? query.OrderByDescending(asset => asset.WarrantyExpiry) : query.OrderBy(asset => asset.WarrantyExpiry),
+            "status" => descending ? query.OrderByDescending(asset => asset.Status) : query.OrderBy(asset => asset.Status),
+            _ => descending ? query.OrderByDescending(asset => asset.AssetTag) : query.OrderBy(asset => asset.AssetTag)
+        };
     }
 }
