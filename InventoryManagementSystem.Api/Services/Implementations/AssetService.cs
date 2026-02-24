@@ -5,7 +5,6 @@ using InventoryManagementSystem.Api.Repositories.Models;
 using InventoryManagementSystem.Api.Services;
 using InventoryManagementSystem.Api.Services.Contracts;
 using InventoryManagementSystem.Api.Services.Models;
-using Microsoft.EntityFrameworkCore;
 
 namespace InventoryManagementSystem.Api.Services.Implementations;
 
@@ -14,6 +13,7 @@ public sealed class AssetService : IAssetService
     private readonly IAssetRepository _repository;
     private readonly IAssetStatusHistoryRepository _statusHistoryRepository;
     private readonly IAssetAssignmentHistoryRepository _assignmentHistoryRepository;
+    private readonly IAuditLogService _auditLogService;
     private readonly IDateTimeProvider _dateTimeProvider;
     private readonly InventoryDbContext _dbContext;
 
@@ -21,12 +21,14 @@ public sealed class AssetService : IAssetService
         IAssetRepository repository,
         IAssetStatusHistoryRepository statusHistoryRepository,
         IAssetAssignmentHistoryRepository assignmentHistoryRepository,
+        IAuditLogService auditLogService,
         IDateTimeProvider dateTimeProvider,
         InventoryDbContext dbContext)
     {
         _repository = repository;
         _statusHistoryRepository = statusHistoryRepository;
         _assignmentHistoryRepository = assignmentHistoryRepository;
+        _auditLogService = auditLogService;
         _dateTimeProvider = dateTimeProvider;
         _dbContext = dbContext;
     }
@@ -50,6 +52,13 @@ public sealed class AssetService : IAssetService
         var created = await _repository.AddAsync(asset, cancellationToken);
 
         await RecordStatusHistory(created.Id, null, created.Status, operatorName, cancellationToken);
+        await WriteAudit(
+            "asset_create",
+            "Asset",
+            created.Id.ToString(),
+            operatorName,
+            "Asset created.",
+            cancellationToken);
         return ServiceResult<Asset>.Ok(created);
     }
 
@@ -105,7 +114,22 @@ public sealed class AssetService : IAssetService
         if (statusChanged)
         {
             await RecordStatusHistory(existing.Id, fromStatus, asset.Status, operatorName, cancellationToken);
+            await WriteAudit(
+                "asset_status_change",
+                "Asset",
+                existing.Id.ToString(),
+                operatorName,
+                $"Status changed to {asset.Status}.",
+                cancellationToken);
         }
+
+        await WriteAudit(
+            "asset_update",
+            "Asset",
+            existing.Id.ToString(),
+            operatorName,
+            "Asset updated.",
+            cancellationToken);
 
         return ServiceResult<Asset>.Ok(existing);
     }
@@ -119,6 +143,13 @@ public sealed class AssetService : IAssetService
         }
 
         await _repository.SoftDeleteAsync(existing, cancellationToken);
+        await WriteAudit(
+            "asset_delete",
+            "Asset",
+            existing.Id.ToString(),
+            "system",
+            "Asset deleted.",
+            cancellationToken);
         return ServiceResult.Ok();
     }
 
@@ -180,6 +211,14 @@ public sealed class AssetService : IAssetService
 
         await RecordStatusHistory(asset.Id, AssetStatus.InStock, AssetStatus.Assigned, operatorName, cancellationToken);
 
+        await WriteAudit(
+            "asset_assign",
+            "Asset",
+            asset.Id.ToString(),
+            operatorName,
+            $"Assigned to employee {employeeId}.",
+            cancellationToken);
+
         return ServiceResult<Asset>.Ok(asset);
     }
 
@@ -231,6 +270,14 @@ public sealed class AssetService : IAssetService
         await RecordReturnHistory(asset.Id, assignedEmployeeId.Value, operatorName, cancellationToken);
 
         await RecordStatusHistory(asset.Id, fromStatus, returnStatus, operatorName, cancellationToken);
+
+        await WriteAudit(
+            "asset_return",
+            "Asset",
+            asset.Id.ToString(),
+            operatorName,
+            "Asset returned.",
+            cancellationToken);
 
         return ServiceResult<Asset>.Ok(asset);
     }
@@ -302,6 +349,14 @@ public sealed class AssetService : IAssetService
         await RecordStatusHistory(newAsset.Id, AssetStatus.InStock, AssetStatus.Assigned, operatorName, cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
+
+        await WriteAudit(
+            "asset_swap",
+            "Asset",
+            $"{oldAsset.Id}->{newAsset.Id}",
+            operatorName,
+            "Asset swap completed.",
+            cancellationToken);
 
         return ServiceResult.Ok();
     }
@@ -432,5 +487,26 @@ public sealed class AssetService : IAssetService
         };
 
         await _assignmentHistoryRepository.AddAsync(history, cancellationToken);
+    }
+
+    private async Task WriteAudit(
+        string action,
+        string entityName,
+        string entityId,
+        string operatorName,
+        string summary,
+        CancellationToken cancellationToken)
+    {
+        var audit = new AuditLog
+        {
+            Action = action,
+            EntityName = entityName,
+            EntityId = entityId,
+            OperatorName = operatorName,
+            Summary = summary,
+            OccurredAtUtc = _dateTimeProvider.UtcNow
+        };
+
+        await _auditLogService.CreateAsync(audit, cancellationToken);
     }
 }
