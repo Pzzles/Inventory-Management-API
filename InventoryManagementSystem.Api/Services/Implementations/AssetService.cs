@@ -14,6 +14,7 @@ public sealed class AssetService : IAssetService
     private readonly IAssetRepository _repository;
     private readonly IAssetStatusHistoryRepository _statusHistoryRepository;
     private readonly IAssetAssignmentHistoryRepository _assignmentHistoryRepository;
+    private readonly IAuditLogService _auditLogService;
     private readonly IDateTimeProvider _dateTimeProvider;
     private readonly InventoryDbContext _dbContext;
 
@@ -21,12 +22,14 @@ public sealed class AssetService : IAssetService
         IAssetRepository repository,
         IAssetStatusHistoryRepository statusHistoryRepository,
         IAssetAssignmentHistoryRepository assignmentHistoryRepository,
+        IAuditLogService auditLogService,
         IDateTimeProvider dateTimeProvider,
         InventoryDbContext dbContext)
     {
         _repository = repository;
         _statusHistoryRepository = statusHistoryRepository;
         _assignmentHistoryRepository = assignmentHistoryRepository;
+        _auditLogService = auditLogService;
         _dateTimeProvider = dateTimeProvider;
         _dbContext = dbContext;
     }
@@ -50,6 +53,13 @@ public sealed class AssetService : IAssetService
         var created = await _repository.AddAsync(asset, cancellationToken);
 
         await RecordStatusHistory(created.Id, null, created.Status, operatorName, cancellationToken);
+        await WriteAudit(
+            "asset_create",
+            "Asset",
+            created.Id.ToString(),
+            operatorName,
+            "Asset created.",
+            cancellationToken);
         return ServiceResult<Asset>.Ok(created);
     }
 
@@ -105,7 +115,22 @@ public sealed class AssetService : IAssetService
         if (statusChanged)
         {
             await RecordStatusHistory(existing.Id, fromStatus, asset.Status, operatorName, cancellationToken);
+            await WriteAudit(
+                "asset_status_change",
+                "Asset",
+                existing.Id.ToString(),
+                operatorName,
+                $"Status changed to {asset.Status}.",
+                cancellationToken);
         }
+
+        await WriteAudit(
+            "asset_update",
+            "Asset",
+            existing.Id.ToString(),
+            operatorName,
+            "Asset updated.",
+            cancellationToken);
 
         return ServiceResult<Asset>.Ok(existing);
     }
@@ -119,6 +144,13 @@ public sealed class AssetService : IAssetService
         }
 
         await _repository.SoftDeleteAsync(existing, cancellationToken);
+        await WriteAudit(
+            "asset_delete",
+            "Asset",
+            existing.Id.ToString(),
+            "system",
+            "Asset deleted.",
+            cancellationToken);
         return ServiceResult.Ok();
     }
 
@@ -180,6 +212,14 @@ public sealed class AssetService : IAssetService
 
         await RecordStatusHistory(asset.Id, AssetStatus.InStock, AssetStatus.Assigned, operatorName, cancellationToken);
 
+        await WriteAudit(
+            "asset_assign",
+            "Asset",
+            asset.Id.ToString(),
+            operatorName,
+            $"Assigned to employee {employeeId}.",
+            cancellationToken);
+
         return ServiceResult<Asset>.Ok(asset);
     }
 
@@ -231,6 +271,14 @@ public sealed class AssetService : IAssetService
         await RecordReturnHistory(asset.Id, assignedEmployeeId.Value, operatorName, cancellationToken);
 
         await RecordStatusHistory(asset.Id, fromStatus, returnStatus, operatorName, cancellationToken);
+
+        await WriteAudit(
+            "asset_return",
+            "Asset",
+            asset.Id.ToString(),
+            operatorName,
+            "Asset returned.",
+            cancellationToken);
 
         return ServiceResult<Asset>.Ok(asset);
     }
@@ -303,7 +351,159 @@ public sealed class AssetService : IAssetService
 
         await transaction.CommitAsync(cancellationToken);
 
+        await WriteAudit(
+            "asset_swap",
+            "Asset",
+            $"{oldAsset.Id}->{newAsset.Id}",
+            operatorName,
+            "Asset swap completed.",
+            cancellationToken);
+
         return ServiceResult.Ok();
+    }
+
+    public async Task<ServiceResult<PagedResult<Asset>>> GetByStatusReportAsync(
+        AssetStatus? status,
+        RepositoryQueryOptions options,
+        CancellationToken cancellationToken)
+    {
+        var query = _dbContext.Assets.AsQueryable();
+
+        if (status.HasValue)
+        {
+            query = query.Where(asset => asset.Status == status.Value);
+        }
+
+        query = ApplyAssetSorting(query, options.SortBy, options.SortDirection);
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var pageNumber = Math.Max(1, options.PageNumber);
+        var pageSize = Math.Max(1, options.PageSize);
+
+        var items = await query
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return ServiceResult<PagedResult<Asset>>.Ok(new PagedResult<Asset>(
+            items,
+            totalCount,
+            pageNumber,
+            pageSize));
+    }
+
+    public async Task<ServiceResult<PagedResult<Asset>>> GetByLocationReportAsync(
+        int? locationId,
+        RepositoryQueryOptions options,
+        CancellationToken cancellationToken)
+    {
+        var query = _dbContext.Assets.AsQueryable();
+
+        if (locationId.HasValue && locationId.Value > 0)
+        {
+            query = query.Where(asset => asset.LocationId == locationId.Value);
+        }
+
+        query = ApplyAssetSorting(query, options.SortBy, options.SortDirection);
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var pageNumber = Math.Max(1, options.PageNumber);
+        var pageSize = Math.Max(1, options.PageSize);
+
+        var items = await query
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return ServiceResult<PagedResult<Asset>>.Ok(new PagedResult<Asset>(
+            items,
+            totalCount,
+            pageNumber,
+            pageSize));
+    }
+
+    public async Task<ServiceResult<PagedResult<Asset>>> GetWarrantyExpiryReportAsync(
+        DateTime fromUtc,
+        DateTime toUtc,
+        RepositoryQueryOptions options,
+        CancellationToken cancellationToken)
+    {
+        var query = _dbContext.Assets
+            .Where(asset => asset.WarrantyExpiry.HasValue)
+            .Where(asset => asset.WarrantyExpiry >= fromUtc && asset.WarrantyExpiry <= toUtc);
+
+        query = ApplyAssetSorting(query, options.SortBy, options.SortDirection);
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var pageNumber = Math.Max(1, options.PageNumber);
+        var pageSize = Math.Max(1, options.PageSize);
+
+        var items = await query
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return ServiceResult<PagedResult<Asset>>.Ok(new PagedResult<Asset>(
+            items,
+            totalCount,
+            pageNumber,
+            pageSize));
+    }
+
+    public async Task<ServiceResult<PagedResult<EmployeeAssetsReportItem>>> GetAssetsByEmployeeReportAsync(
+        EmployeeAssetsReportOptions options,
+        CancellationToken cancellationToken)
+    {
+        var employeeQuery = _dbContext.Employees.AsQueryable();
+
+        if (options.EmployeeId.HasValue && options.EmployeeId.Value > 0)
+        {
+            employeeQuery = employeeQuery.Where(employee => employee.Id == options.EmployeeId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.Email))
+        {
+            employeeQuery = employeeQuery.Where(employee => employee.Email == options.Email);
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.StaffNumber))
+        {
+            employeeQuery = employeeQuery.Where(employee => employee.StaffNumber == options.StaffNumber);
+        }
+
+        var totalCount = await employeeQuery.CountAsync(cancellationToken);
+        var pageNumber = Math.Max(1, options.PageNumber);
+        var pageSize = Math.Max(1, options.PageSize);
+
+        var employees = await employeeQuery
+            .OrderBy(employee => employee.LastName)
+            .ThenBy(employee => employee.FirstName)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        var employeeIds = employees.Select(employee => employee.Id).ToList();
+
+        var assets = await _dbContext.Assets
+            .Where(asset => asset.AssignedEmployeeId.HasValue)
+            .Where(asset => employeeIds.Contains(asset.AssignedEmployeeId!.Value))
+            .ToListAsync(cancellationToken);
+
+        var assetLookup = assets
+            .GroupBy(asset => asset.AssignedEmployeeId!.Value)
+            .ToDictionary(group => group.Key, group => (IReadOnlyList<Asset>)group.ToList());
+
+        var items = employees
+            .Select(employee =>
+            {
+                assetLookup.TryGetValue(employee.Id, out var assignedAssets);
+                assignedAssets ??= Array.Empty<Asset>();
+                return new EmployeeAssetsReportItem(employee, assignedAssets);
+            })
+            .ToList();
+
+        return ServiceResult<PagedResult<EmployeeAssetsReportItem>>.Ok(
+            new PagedResult<EmployeeAssetsReportItem>(items, totalCount, pageNumber, pageSize));
     }
 
     private static ServiceResult Validate(Asset asset, string operatorName)
@@ -432,5 +632,47 @@ public sealed class AssetService : IAssetService
         };
 
         await _assignmentHistoryRepository.AddAsync(history, cancellationToken);
+    }
+
+    private async Task WriteAudit(
+        string action,
+        string entityName,
+        string entityId,
+        string operatorName,
+        string summary,
+        CancellationToken cancellationToken)
+    {
+        var audit = new AuditLog
+        {
+            Action = action,
+            EntityName = entityName,
+            EntityId = entityId,
+            OperatorName = operatorName,
+            Summary = summary,
+            OccurredAtUtc = _dateTimeProvider.UtcNow
+        };
+
+        await _auditLogService.CreateAsync(audit, cancellationToken);
+    }
+
+    private static IQueryable<Asset> ApplyAssetSorting(
+        IQueryable<Asset> query,
+        string? sortBy,
+        string? sortDirection)
+    {
+        var descending = string.Equals(sortDirection, "desc", StringComparison.OrdinalIgnoreCase);
+
+        return (sortBy ?? string.Empty).ToLowerInvariant() switch
+        {
+            "assettag" => descending ? query.OrderByDescending(asset => asset.AssetTag) : query.OrderBy(asset => asset.AssetTag),
+            "serialnumber" => descending ? query.OrderByDescending(asset => asset.SerialNumber) : query.OrderBy(asset => asset.SerialNumber),
+            "type" => descending ? query.OrderByDescending(asset => asset.Type) : query.OrderBy(asset => asset.Type),
+            "brand" => descending ? query.OrderByDescending(asset => asset.Brand) : query.OrderBy(asset => asset.Brand),
+            "model" => descending ? query.OrderByDescending(asset => asset.Model) : query.OrderBy(asset => asset.Model),
+            "purchasedate" => descending ? query.OrderByDescending(asset => asset.PurchaseDate) : query.OrderBy(asset => asset.PurchaseDate),
+            "warrantyexpiry" => descending ? query.OrderByDescending(asset => asset.WarrantyExpiry) : query.OrderBy(asset => asset.WarrantyExpiry),
+            "status" => descending ? query.OrderByDescending(asset => asset.Status) : query.OrderBy(asset => asset.Status),
+            _ => descending ? query.OrderByDescending(asset => asset.AssetTag) : query.OrderBy(asset => asset.AssetTag)
+        };
     }
 }

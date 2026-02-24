@@ -17,6 +17,11 @@ public sealed class AuditLogService : IAuditLogService
 
     public async Task<ServiceResult<AuditLog>> CreateAsync(AuditLog auditLog, CancellationToken cancellationToken)
     {
+        if (auditLog.OccurredAtUtc == default)
+        {
+            auditLog.OccurredAtUtc = DateTime.UtcNow;
+        }
+
         var validation = Validate(auditLog);
         if (!validation.IsSuccess)
         {
@@ -47,6 +52,11 @@ public sealed class AuditLogService : IAuditLogService
         existing.Action = auditLog.Action;
         existing.EntityName = auditLog.EntityName;
         existing.EntityId = auditLog.EntityId;
+        existing.OperatorName = auditLog.OperatorName;
+        existing.Summary = auditLog.Summary;
+        existing.OccurredAtUtc = auditLog.OccurredAtUtc == default
+            ? DateTime.UtcNow
+            : auditLog.OccurredAtUtc;
         existing.Details = auditLog.Details;
 
         await _repository.UpdateAsync(existing, cancellationToken);
@@ -96,6 +106,16 @@ public sealed class AuditLogService : IAuditLogService
         if (string.IsNullOrWhiteSpace(auditLog.EntityId))
         {
             errors.Add(new ServiceError("entity_id_required", "Entity id is required."));
+        }
+
+        if (string.IsNullOrWhiteSpace(auditLog.OperatorName))
+        {
+            errors.Add(new ServiceError("operator_required", "Operator name is required."));
+        }
+
+        if (string.IsNullOrWhiteSpace(auditLog.Summary))
+        {
+            errors.Add(new ServiceError("summary_required", "Summary is required."));
         }
 
         return errors.Count == 0

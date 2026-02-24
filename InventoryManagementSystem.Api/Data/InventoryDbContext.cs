@@ -167,8 +167,19 @@ public sealed class InventoryDbContext : DbContext
         modelBuilder.Entity<Repair>(entity =>
         {
             entity.HasKey(repair => repair.Id);
-            entity.Property(repair => repair.Description).IsRequired().HasMaxLength(500);
+            entity.Property(repair => repair.AssetId).IsRequired();
+            entity.Property(repair => repair.Vendor).IsRequired().HasMaxLength(200);
+            entity.Property(repair => repair.Cost).HasColumnType("decimal(18,2)");
+            entity.Property(repair => repair.Notes).HasMaxLength(2000);
+            entity.Property(repair => repair.Status).IsRequired();
+            entity.Property(repair => repair.LoggedAtUtc).IsRequired();
+            entity.HasIndex(repair => repair.AssetId);
             entity.HasQueryFilter(repair => !repair.IsDeleted);
+
+            entity.HasOne(repair => repair.Asset)
+                .WithMany()
+                .HasForeignKey(repair => repair.AssetId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<AuditLog>(entity =>
@@ -177,6 +188,9 @@ public sealed class InventoryDbContext : DbContext
             entity.Property(audit => audit.Action).IsRequired().HasMaxLength(200);
             entity.Property(audit => audit.EntityName).IsRequired().HasMaxLength(200);
             entity.Property(audit => audit.EntityId).IsRequired().HasMaxLength(100);
+            entity.Property(audit => audit.OperatorName).IsRequired().HasMaxLength(200);
+            entity.Property(audit => audit.Summary).IsRequired().HasMaxLength(500);
+            entity.Property(audit => audit.OccurredAtUtc).IsRequired();
             entity.HasQueryFilter(audit => !audit.IsDeleted);
         });
     }

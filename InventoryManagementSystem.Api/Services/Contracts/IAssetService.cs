@@ -43,4 +43,24 @@ public interface IAssetService
         int employeeId,
         string operatorName,
         CancellationToken cancellationToken);
+
+    Task<ServiceResult<PagedResult<Asset>>> GetByStatusReportAsync(
+        AssetStatus? status,
+        RepositoryQueryOptions options,
+        CancellationToken cancellationToken);
+
+    Task<ServiceResult<PagedResult<Asset>>> GetByLocationReportAsync(
+        int? locationId,
+        RepositoryQueryOptions options,
+        CancellationToken cancellationToken);
+
+    Task<ServiceResult<PagedResult<Asset>>> GetWarrantyExpiryReportAsync(
+        DateTime fromUtc,
+        DateTime toUtc,
+        RepositoryQueryOptions options,
+        CancellationToken cancellationToken);
+
+    Task<ServiceResult<PagedResult<EmployeeAssetsReportItem>>> GetAssetsByEmployeeReportAsync(
+        EmployeeAssetsReportOptions options,
+        CancellationToken cancellationToken);
 }

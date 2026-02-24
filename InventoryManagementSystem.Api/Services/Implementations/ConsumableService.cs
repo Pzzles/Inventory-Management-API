@@ -12,15 +12,18 @@ public sealed class ConsumableService : IConsumableService
     private readonly IConsumableRepository _repository;
     private readonly IConsumableAdjustmentRepository _adjustmentRepository;
     private readonly IDateTimeProvider _dateTimeProvider;
+    private readonly IAuditLogService _auditLogService;
 
     public ConsumableService(
         IConsumableRepository repository,
         IConsumableAdjustmentRepository adjustmentRepository,
-        IDateTimeProvider dateTimeProvider)
+        IDateTimeProvider dateTimeProvider,
+        IAuditLogService auditLogService)
     {
         _repository = repository;
         _adjustmentRepository = adjustmentRepository;
         _dateTimeProvider = dateTimeProvider;
+        _auditLogService = auditLogService;
     }
 
     public async Task<ServiceResult<Consumable>> CreateAsync(Consumable consumable, CancellationToken cancellationToken)
@@ -32,6 +35,13 @@ public sealed class ConsumableService : IConsumableService
         }
 
         var created = await _repository.AddAsync(consumable, cancellationToken);
+        await WriteAudit(
+            "consumable_create",
+            "Consumable",
+            created.Id.ToString(),
+            "system",
+            "Consumable created.",
+            cancellationToken);
         return ServiceResult<Consumable>.Ok(created);
     }
 
@@ -60,6 +70,13 @@ public sealed class ConsumableService : IConsumableService
         existing.LocationId = consumable.LocationId;
 
         await _repository.UpdateAsync(existing, cancellationToken);
+        await WriteAudit(
+            "consumable_update",
+            "Consumable",
+            existing.Id.ToString(),
+            "system",
+            "Consumable updated.",
+            cancellationToken);
         return ServiceResult<Consumable>.Ok(existing);
     }
 
@@ -72,6 +89,13 @@ public sealed class ConsumableService : IConsumableService
         }
 
         await _repository.SoftDeleteAsync(existing, cancellationToken);
+        await WriteAudit(
+            "consumable_delete",
+            "Consumable",
+            existing.Id.ToString(),
+            "system",
+            "Consumable deleted.",
+            cancellationToken);
         return ServiceResult.Ok();
     }
 
@@ -112,6 +136,13 @@ public sealed class ConsumableService : IConsumableService
         await _repository.UpdateAsync(existing, cancellationToken);
 
         await RecordAdjustment(existing.Id, quantity, reason, operatorName, cancellationToken);
+        await WriteAudit(
+            "consumable_stock_in",
+            "Consumable",
+            existing.Id.ToString(),
+            operatorName,
+            $"Stock in: {quantity}.",
+            cancellationToken);
         return ServiceResult<Consumable>.Ok(existing);
     }
 
@@ -145,6 +176,13 @@ public sealed class ConsumableService : IConsumableService
         await _repository.UpdateAsync(existing, cancellationToken);
 
         await RecordAdjustment(existing.Id, -quantity, reason, operatorName, cancellationToken);
+        await WriteAudit(
+            "consumable_stock_out",
+            "Consumable",
+            existing.Id.ToString(),
+            operatorName,
+            $"Stock out: {quantity}.",
+            cancellationToken);
         return ServiceResult<Consumable>.Ok(existing);
     }
 
@@ -229,5 +267,26 @@ public sealed class ConsumableService : IConsumableService
         };
 
         await _adjustmentRepository.AddAsync(adjustment, cancellationToken);
+    }
+
+    private async Task WriteAudit(
+        string action,
+        string entityName,
+        string entityId,
+        string operatorName,
+        string summary,
+        CancellationToken cancellationToken)
+    {
+        var audit = new AuditLog
+        {
+            Action = action,
+            EntityName = entityName,
+            EntityId = entityId,
+            OperatorName = operatorName,
+            Summary = summary,
+            OccurredAtUtc = _dateTimeProvider.UtcNow
+        };
+
+        await _auditLogService.CreateAsync(audit, cancellationToken);
     }
 }

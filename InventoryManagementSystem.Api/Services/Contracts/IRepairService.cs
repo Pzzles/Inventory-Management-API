@@ -6,9 +6,16 @@ namespace InventoryManagementSystem.Api.Services.Contracts;
 
 public interface IRepairService
 {
-    Task<ServiceResult<Repair>> CreateAsync(Repair repair, CancellationToken cancellationToken);
+    Task<ServiceResult<Repair>> CreateAsync(
+        Repair repair,
+        string operatorName,
+        CancellationToken cancellationToken);
 
-    Task<ServiceResult<Repair>> UpdateAsync(int id, Repair repair, CancellationToken cancellationToken);
+    Task<ServiceResult<Repair>> UpdateAsync(
+        int id,
+        Repair repair,
+        string operatorName,
+        CancellationToken cancellationToken);
 
     Task<ServiceResult> DeleteAsync(int id, CancellationToken cancellationToken);
 
